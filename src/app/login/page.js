@@ -1,10 +1,10 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { Suspense, useState, useEffect } from "react";
 import { Card, Button, Input } from "@/shared/components";
 import { useRouter, useSearchParams } from "next/navigation";
 
-export default function LoginPage() {
+function LoginContent() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
@@ -228,5 +228,22 @@ export default function LoginPage() {
         </Card>
       </div>
     </div>
+  );
+}
+
+const LoginFallback = () => (
+  <div className="min-h-screen flex items-center justify-center bg-bg p-4">
+    <div className="text-center">
+      <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
+      <p className="text-text-muted mt-4">Loading...</p>
+    </div>
+  </div>
+);
+
+export default function LoginPage() {
+  return (
+    <Suspense fallback={<LoginFallback />}>
+      <LoginContent />
+    </Suspense>
   );
 }
