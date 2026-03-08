@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { getPkceFromSession } from "@/shared/utils/pkceClient";
 
-export default function LoginCallbackPage() {
+function LoginCallbackContent() {
   const searchParams = useSearchParams();
   const [error, setError] = useState("");
   const [status, setStatus] = useState("exchanging"); // exchanging | session | done
@@ -113,5 +113,22 @@ export default function LoginCallbackPage() {
         </p>
       </div>
     </div>
+  );
+}
+
+const Fallback = () => (
+  <div className="min-h-screen flex items-center justify-center bg-bg p-4">
+    <div className="text-center">
+      <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
+      <p className="text-text-muted mt-4">Loading…</p>
+    </div>
+  </div>
+);
+
+export default function LoginCallbackPage() {
+  return (
+    <Suspense fallback={<Fallback />}>
+      <LoginCallbackContent />
+    </Suspense>
   );
 }
