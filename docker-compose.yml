@@ -1,0 +1,23 @@
+# Dev stack: Postgres only. Run app with: npm run dev
+# Usage: docker compose up -d && npm run dev
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: egs-proxy-ai-pg
+    environment:
+      POSTGRES_USER: egs_proxy_ai
+      POSTGRES_PASSWORD: egs_proxy_ai
+      POSTGRES_DB: egs_proxy_ai
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U egs_proxy_ai -d egs_proxy_ai"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  pgdata:
