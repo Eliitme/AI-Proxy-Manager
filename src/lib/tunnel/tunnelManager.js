@@ -58,7 +58,23 @@ async function workerFetch(reqPath, options = {}) {
         "Set TUNNEL_WORKER_URL to the tunnel API base URL (e.g. https://tunnel.egsproxy.ai), not the app dashboard URL."
     );
   }
-  return JSON.parse(text);
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error(`Tunnel worker returned invalid JSON for ${reqPath} (status ${res.status})`);
+  }
+  if (!res.ok) {
+    const msg = data?.error || data?.message || `HTTP ${res.status}`;
+    if (res.status === 404) {
+      throw new Error(
+        `Tunnel API not found at ${reqPath} (404). ` +
+          "Ensure TUNNEL_WORKER_URL points to a service that implements the tunnel API (e.g. https://tunnel.egsproxy.ai), not the app or cloud sync worker."
+      );
+    }
+    throw new Error(msg);
+  }
+  return data;
 }
 
 export async function enableTunnel() {

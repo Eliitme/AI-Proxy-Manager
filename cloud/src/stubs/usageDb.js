@@ -6,3 +6,4 @@ export async function getUsageDb() { return { data: { history: [] } }; }
 export async function getUsageHistory() { return []; }
 export async function getUsageStats() { return {}; }
 export async function getRecentLogs() { return []; }
+export async function saveRequestDetail() {}
