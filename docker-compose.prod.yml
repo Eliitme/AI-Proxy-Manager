@@ -51,6 +51,7 @@ services:
       TUNNEL_SUBDOMAIN: ${TUNNEL_SUBDOMAIN:-tunnel}
       JWT_SECRET: ${JWT_SECRET:-change-me-to-a-long-random-secret}
       INITIAL_PASSWORD: ${INITIAL_PASSWORD:-change-me}
+      DB_ENCRYPTION_SECRET: ${DB_ENCRYPTION_SECRET:-}
       # Optional: pass through from host .env
       API_KEY_SECRET: ${API_KEY_SECRET:-}
       MACHINE_ID_SALT: ${MACHINE_ID_SALT:-}

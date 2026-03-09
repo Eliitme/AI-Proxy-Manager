@@ -1,4 +1,4 @@
-import { CURSOR_CONFIG } from "../constants/oauth.js";
+import { CURSOR_CONFIG } from "../constants/cursor.js";
 
 /**
  * Cursor IDE OAuth Service

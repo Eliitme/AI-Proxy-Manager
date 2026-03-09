@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { access, constants } from "fs/promises";
 import { homedir } from "os";
 import { join } from "path";
+import Database from "better-sqlite3";
+import { CURSOR_CONFIG } from "../../../../../lib/oauth/constants/cursor.js";
 
 /** Get candidate db paths by platform (Cursor IDE state.vscdb) */
 function getCandidatePaths(platform) {
@@ -32,9 +34,36 @@ function getCandidatePaths(platform) {
 }
 
 /**
+ * Read accessToken and machineId from Cursor state.vscdb (itemTable key/value).
+ * Returns { accessToken, machineId } or null if read fails (e.g. file locked, wrong schema).
+ */
+function readCursorTokensFromDb(dbPath) {
+  const { accessToken: keyToken, machineId: keyMachine } = CURSOR_CONFIG.dbKeys;
+  let db = null;
+  try {
+    db = new Database(dbPath, { readonly: true });
+    const stmt = db.prepare(
+      "SELECT key, value FROM itemTable WHERE key = ? OR key = ?"
+    );
+    const rows = stmt.all(keyToken, keyMachine);
+    const byKey = Object.fromEntries(rows.map((r) => [r.key, r.value]));
+    const accessToken = byKey[keyToken];
+    const machineId = byKey[keyMachine];
+    if (accessToken && machineId) {
+      return { accessToken: String(accessToken), machineId: String(machineId) };
+    }
+    return null;
+  } catch (err) {
+    return null;
+  } finally {
+    if (db) db.close();
+  }
+}
+
+/**
  * GET /api/oauth/cursor/auto-import
- * Chỉ kiểm tra file Cursor state.vscdb có tồn tại; không đọc nội dung.
- * Trả dbPath để UI hướng dẫn user paste token thủ công (không dùng sqlite3).
+ * Detects Cursor state.vscdb, reads accessToken and machineId when possible.
+ * Returns found: true + tokens for auto-fill; otherwise windowsManual or error for manual paste.
  */
 export async function GET() {
   try {
@@ -59,12 +88,21 @@ export async function GET() {
       });
     }
 
-    // Không đọc file — chỉ báo đường dẫn, user paste token thủ công (windowsManual để UI hiện form paste)
+    const tokens = readCursorTokensFromDb(dbPath);
+    if (tokens) {
+      return NextResponse.json({
+        found: true,
+        accessToken: tokens.accessToken,
+        machineId: tokens.machineId,
+      });
+    }
+
     return NextResponse.json({
       found: false,
       windowsManual: true,
       dbPath,
-      message: "Paste your Cursor access token and machine ID manually from Cursor settings.",
+      message:
+        "Could not read tokens from Cursor database (e.g. Cursor may be open). Paste your access token and machine ID manually below.",
     });
   } catch (error) {
     console.log("Cursor auto-import error:", error);
