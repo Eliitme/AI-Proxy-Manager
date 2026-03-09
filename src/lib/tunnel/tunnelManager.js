@@ -50,7 +50,15 @@ async function workerFetch(reqPath, options = {}) {
     ...options,
     headers: { "Content-Type": "application/json", ...options.headers }
   });
-  return res.json();
+  const text = await res.text();
+  const contentType = res.headers.get("content-type") || "";
+  if (!contentType.includes("application/json") || text.trimStart().startsWith("<")) {
+    throw new Error(
+      `Tunnel worker at ${new URL(TUNNEL_WORKER_URL).origin} returned HTML instead of JSON for ${reqPath}. ` +
+        "Set TUNNEL_WORKER_URL to the tunnel API base URL (e.g. https://tunnel.egsproxy.ai), not the app dashboard URL."
+    );
+  }
+  return JSON.parse(text);
 }
 
 export async function enableTunnel() {
