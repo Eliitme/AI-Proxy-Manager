@@ -964,6 +964,7 @@ export HOSTNAME="0.0.0.0"
 export NODE_ENV="production"
 export NEXT_PUBLIC_BASE_URL="http://localhost:20128"
 export NEXT_PUBLIC_CLOUD_URL="https://egs-proxy-ai.com"
+export DB_ENCRYPTION_SECRET="your-32-char-or-longer-random-secret"
 export API_KEY_SECRET="endpoint-proxy-api-key-secret"
 export MACHINE_ID_SALT="endpoint-proxy-salt"
 
@@ -1031,6 +1032,7 @@ docker stop egs-proxy-ai && docker rm egs-proxy-ai
 | `CLOUD_URL` | `https://egs-proxy-ai.com` | Server-side cloud sync endpoint base URL |
 | `NEXT_PUBLIC_BASE_URL` | `http://localhost:3000` | Backward-compatible/public base URL (prefer `BASE_URL` for server runtime) |
 | `NEXT_PUBLIC_CLOUD_URL` | `https://egs-proxy-ai.com` | Backward-compatible/public cloud URL (prefer `CLOUD_URL` for server runtime) |
+| `DB_ENCRYPTION_SECRET` | (none) | **Required** for at-rest encryption of API keys and provider credentials in PostgreSQL. Use a long random string (e.g. 32+ chars). Do not rotate without re-encrypting existing data. |
 | `API_KEY_SECRET` | `endpoint-proxy-api-key-secret` | HMAC secret for generated API keys |
 | `MACHINE_ID_SALT` | `endpoint-proxy-salt` | Salt for stable machine ID hashing |
 | `ENABLE_REQUEST_LOGS` | `false` | Enables request/response logs under `logs/` |
@@ -1039,6 +1041,7 @@ docker stop egs-proxy-ai && docker rm egs-proxy-ai
 | `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY` | empty | Optional outbound proxy for upstream provider calls |
 
 Notes:
+- `DB_ENCRYPTION_SECRET` is required when using PostgreSQL; API keys and provider `api_key` values are encrypted at rest. Back up this secret securely; losing it prevents decryption of stored credentials.
 - Lowercase proxy variables are also supported: `http_proxy`, `https_proxy`, `all_proxy`, `no_proxy`.
 - `.env` is not baked into Docker image (`.dockerignore`); inject runtime config with `--env-file` or `-e`.
 - On Windows, `APPDATA` can be used for local storage path resolution.

@@ -121,7 +121,7 @@ export default function CursorAuthModal({ isOpen, onSuccess, onClose }) {
               </div>
             )}
 
-            {/* Windows manual instructions */}
+            {/* Manual paste instructions (DB unreadable, or adding from another machine) */}
             {windowsManual && (
               <div className="bg-amber-50 dark:bg-amber-900/20 p-3 rounded-lg border border-amber-200 dark:border-amber-800 flex flex-col gap-2">
                 <div className="flex gap-2 items-center">
@@ -131,24 +131,21 @@ export default function CursorAuthModal({ isOpen, onSuccess, onClose }) {
                   </p>
                 </div>
                 <p className="text-xs text-amber-700 dark:text-amber-300">
-                  Run this command in your terminal, then click <strong>Retry</strong>:
+                  You can still add Cursor from this or another machine: on the computer where Cursor is installed, get the access token and machine ID from <code className="bg-black/10 dark:bg-white/10 px-1 rounded">state.vscdb</code> (e.g. with sqlite3 or a DB viewer), then paste both values below.
                 </p>
-                <pre className="text-xs bg-black/10 dark:bg-white/10 rounded p-2 font-mono select-all">
-                  npm i better-sqlite3 -g
-                </pre>
                 <Button onClick={runAutoDetect} variant="outline" fullWidth>
-                  Retry
+                  Retry auto-detect
                 </Button>
               </div>
             )}
 
-            {/* Info message if not auto-detected */}
+            {/* Info message if not auto-detected (e.g. 9router on server, or no Cursor on this machine) */}
             {!autoDetected && !windowsManual && !error && (
               <div className="bg-blue-50 dark:bg-blue-900/20 p-3 rounded-lg border border-blue-200 dark:border-blue-800">
                 <div className="flex gap-2">
                   <span className="material-symbols-outlined text-blue-600 dark:text-blue-400">info</span>
                   <p className="text-sm text-blue-800 dark:text-blue-200">
-                    Cursor IDE not detected. Please paste your tokens manually.
+                    Cursor IDE not detected on this server. You can add Cursor from any machine: on the PC where Cursor is installed, copy the access token and machine ID from <code className="bg-black/10 dark:bg-white/10 px-1 rounded">state.vscdb</code>, then paste them below.
                   </p>
                 </div>
               </div>
@@ -181,10 +178,16 @@ export default function CursorAuthModal({ isOpen, onSuccess, onClose }) {
               />
             </div>
 
-            {/* Error Display */}
+            {/* Error Display (e.g. Cursor DB not found — can still paste from another machine) */}
             {error && (
-              <div className="bg-red-50 dark:bg-red-900/20 p-3 rounded-lg border border-red-200 dark:border-red-800">
+              <div className="bg-red-50 dark:bg-red-900/20 p-3 rounded-lg border border-red-200 dark:border-red-800 flex flex-col gap-2">
                 <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
+                <p className="text-xs text-red-700 dark:text-red-300">
+                  Adding from another machine? Get the token and machine ID on the computer where Cursor is installed, then paste them in the fields below.
+                </p>
+                <Button onClick={runAutoDetect} variant="outline" size="sm">
+                  Retry auto-detect
+                </Button>
               </div>
             )}
 

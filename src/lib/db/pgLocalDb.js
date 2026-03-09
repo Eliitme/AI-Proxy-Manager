@@ -4,6 +4,12 @@
  */
 import { getPool } from "./postgres.js";
 import { v4 as uuidv4 } from "uuid";
+import {
+  encrypt,
+  decrypt,
+  hashForLookup,
+  decryptProviderApiKey,
+} from "./encryption.js";
 
 function toCamel(str) {
   return str.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
@@ -61,6 +67,9 @@ export async function getProviderConnections(filter = {}, userId = null) {
   q += " ORDER BY priority ASC NULLS LAST, updated_at DESC";
   const res = await p.query(q, params);
   let list = res.rows.map(rowToCamel);
+  list.forEach((c) => {
+    if (c.apiKey != null) c.apiKey = decryptProviderApiKey(c.apiKey);
+  });
   return list;
 }
 
@@ -74,6 +83,7 @@ export async function getProviderConnectionById(id, userId = null) {
   if (!row) return null;
   const c = rowToCamel(row);
   if (userId && c.userId && c.userId !== userId) return null;
+  if (c.apiKey != null) c.apiKey = decryptProviderApiKey(c.apiKey);
   return c;
 }
 
@@ -145,7 +155,7 @@ export async function createProviderConnection(data) {
       data.scope ?? null,
       data.idToken ?? null,
       data.projectId ?? null,
-      data.apiKey ?? null,
+      data.apiKey != null ? encrypt(data.apiKey) : null,
       data.testStatus ?? null,
       data.lastTested ?? null,
       data.lastError ?? null,
@@ -203,11 +213,11 @@ export async function updateProviderConnection(id, data, userId = null) {
   for (const [k, col] of Object.entries(map)) {
     if (data[k] !== undefined) {
       updates.push(`${col} = $${i++}`);
-      values.push(
+      const val =
         k === "providerSpecificData" && data[k] != null
           ? JSON.stringify(data[k])
-          : data[k]
-      );
+          : data[k];
+      values.push(k === "apiKey" && val != null ? encrypt(val) : val);
     }
   }
   if (updates.length === 0) return existing;
@@ -484,6 +494,13 @@ export async function deleteCombo(id, userId = null) {
   return true;
 }
 
+function resolveApiKeyRow(c) {
+  c.key =
+    c.keyEncrypted != null ? (decrypt(c.keyEncrypted) ?? c.key) : c.key;
+  delete c.keyEncrypted;
+  return c;
+}
+
 // ---------- API keys ----------
 export async function getApiKeys(userId = null) {
   const p = await pool();
@@ -495,7 +512,7 @@ export async function getApiKeys(userId = null) {
   }
   q += " ORDER BY created_at";
   const res = await p.query(q, params);
-  return res.rows.map(rowToCamel);
+  return res.rows.map((row) => resolveApiKeyRow(rowToCamel(row)));
 }
 
 export async function getApiKeyById(id, userId = null) {
@@ -505,18 +522,20 @@ export async function getApiKeyById(id, userId = null) {
   if (!row) return null;
   const c = rowToCamel(row);
   if (userId && c.userId && c.userId !== userId) return null;
-  return c;
+  return resolveApiKeyRow(c);
 }
 
 export async function createApiKey(name, machineId, userId = null) {
   const { generateApiKeyWithMachine } = await import("@/shared/utils/apiKey");
   const result = generateApiKeyWithMachine(machineId);
+  const keyHash = hashForLookup(result.key);
+  const keyEncrypted = encrypt(result.key);
   const p = await pool();
   const id = uuidv4();
   const now = new Date();
   await p.query(
-    "INSERT INTO api_keys (id, user_id, name, key, machine_id, is_active, created_at) VALUES ($1, $2, $3, $4, $5, true, $6)",
-    [id, userId, name, result.key, machineId, now]
+    "INSERT INTO api_keys (id, user_id, name, key_hash, key_encrypted, machine_id, is_active, created_at) VALUES ($1, $2, $3, $4, $5, $6, true, $7)",
+    [id, userId, name, keyHash, keyEncrypted, machineId, now]
   );
   return getApiKeyById(id, userId);
 }
@@ -552,12 +571,25 @@ export async function deleteApiKey(id, userId = null) {
 
 export async function validateApiKey(key) {
   const p = await pool();
-  const res = await p.query(
-    "SELECT * FROM api_keys WHERE key = $1 AND is_active = true",
-    [key]
+  const keyHash = hashForLookup(key);
+  let res = await p.query(
+    "SELECT * FROM api_keys WHERE key_hash = $1 AND is_active = true",
+    [keyHash]
   );
-  const row = res.rows[0];
-  return row ? rowToCamel(row) : null;
+  let row = res.rows[0];
+  if (!row) {
+    res = await p.query(
+      "SELECT * FROM api_keys WHERE key = $1 AND is_active = true",
+      [key]
+    );
+    row = res.rows[0];
+  }
+  if (!row) return null;
+  const c = rowToCamel(row);
+  c.key =
+    c.keyEncrypted != null ? (decrypt(c.keyEncrypted) ?? c.key) : c.key;
+  delete c.keyEncrypted;
+  return c;
 }
 
 // ---------- Cleanup ----------
