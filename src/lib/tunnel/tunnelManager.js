@@ -8,8 +8,10 @@ const TUNNEL_WORKER_URL = process.env.TUNNEL_WORKER_URL || "https://tunnel.egspr
 const TUNNEL_CUSTOM_DOMAIN = process.env.TUNNEL_CUSTOM_DOMAIN || "";
 /** Subdomain label under custom domain, e.g. "tunnel" → <shortId>.tunnel.eastgate-software.com */
 const TUNNEL_SUBDOMAIN = process.env.TUNNEL_SUBDOMAIN || "tunnel";
-const MACHINE_ID_SALT = "egs-proxy-ai-tunnel-salt";
-const API_KEY_SECRET = "egs-proxy-ai-tunnel-api-key-secret";
+/** Salt for machine ID hashing. Must match the tunnel worker if you self-host. */
+const MACHINE_ID_SALT = process.env.MACHINE_ID_SALT || "egs-proxy-ai-tunnel-salt";
+/** Secret used to sign tunnel API keys (HMAC). Must match the tunnel worker; set in .env if you self-host. */
+const API_KEY_SECRET = process.env.API_KEY_SECRET || "egs-proxy-ai-tunnel-api-key-secret";
 const SHORT_ID_LENGTH = 6;
 const SHORT_ID_CHARS = "abcdefghijklmnpqrstuvwxyz23456789";
 const RECONNECT_DELAYS_MS = [5000, 15000, 30000];

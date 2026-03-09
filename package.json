@@ -8,6 +8,7 @@
     "db:up": "docker compose up -d postgres",
     "db:down": "docker compose down",
     "db:migrate": "node scripts/db/migrate.js",
+    "gen-key": "node scripts/gen-tunnel-api-key.js",
     "build": "NODE_ENV=production next build --webpack",
     "start": "NODE_ENV=production next start",
     "dev:bun": "bun --bun next dev --webpack --port 20128",
