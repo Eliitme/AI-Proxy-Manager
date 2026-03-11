@@ -24,6 +24,7 @@ export function filterToOpenAIFormat(body) {
       const filteredContent = [];
       
       for (const block of msg.content) {
+        if (!block) continue;
         // Skip thinking blocks
         if (block.type === "thinking" || block.type === "redacted_thinking") continue;
         
@@ -63,8 +64,7 @@ export function filterToOpenAIFormat(body) {
     if (typeof msg.content === "string") return msg.content.trim() !== "";
     if (Array.isArray(msg.content)) {
       return msg.content.some(b => 
-        (b.type === "text" && b.text?.trim()) ||
-        b.type !== "text"
+        b && ((b.type === "text" && b.text?.trim()) || b.type !== "text")
       );
     }
     return true;
@@ -77,7 +77,7 @@ export function filterToOpenAIFormat(body) {
 
   // Normalize tools to OpenAI format (from Claude, Gemini, etc.)
   if (body.tools && Array.isArray(body.tools) && body.tools.length > 0) {
-    body.tools = body.tools.map(tool => {
+    body.tools = body.tools.filter(Boolean).map(tool => {
       // Already OpenAI format
       if (tool.type === "function" && tool.function) return tool;
       

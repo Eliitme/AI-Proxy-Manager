@@ -259,7 +259,7 @@ function convertOpenAIToolChoice(choice) {
 function extractTextContent(content) {
   if (typeof content === "string") return content;
   if (Array.isArray(content)) {
-    return content.filter(c => c.type === "text").map(c => c.text).join("\n");
+    return content.filter(c => c && c.type === "text").map(c => c.text).join("\n");
   }
   return "";
 }
@@ -281,7 +281,7 @@ function openaiToClaudeRequestForAntigravity(model, body, stream) {
   // Remove Claude Code system prompt, keep only user's system messages
   if (result.system && Array.isArray(result.system)) {
     result.system = result.system.filter(block => 
-      !block.text || !block.text.includes("You are Claude Code")
+      !block || !block.text || !block.text.includes("You are Claude Code")
     );
     if (result.system.length === 0) {
       delete result.system;
@@ -290,7 +290,8 @@ function openaiToClaudeRequestForAntigravity(model, body, stream) {
   
   // Strip prefix from tool names for Antigravity (doesn't use Claude OAuth)
   if (result.tools && Array.isArray(result.tools)) {
-    result.tools = result.tools.map(tool => {
+    const tools = result.tools.filter(Boolean);
+    result.tools = tools.map(tool => {
       if (tool.name && tool.name.startsWith(CLAUDE_OAUTH_TOOL_PREFIX)) {
         return {
           ...tool,
@@ -303,13 +304,14 @@ function openaiToClaudeRequestForAntigravity(model, body, stream) {
   
   // Strip prefix from tool_use in messages
   if (result.messages && Array.isArray(result.messages)) {
-    result.messages = result.messages.map(msg => {
+    const messages = result.messages.filter(Boolean);
+    result.messages = messages.map(msg => {
       if (!msg.content || !Array.isArray(msg.content)) {
         return msg;
       }
-      
-      const updatedContent = msg.content.map(block => {
-        if (block.type === "tool_use" && block.name && block.name.startsWith(CLAUDE_OAUTH_TOOL_PREFIX)) {
+      const content = msg.content.filter(Boolean);
+      const updatedContent = content.map(block => {
+        if (block && block.type === "tool_use" && block.name && block.name.startsWith(CLAUDE_OAUTH_TOOL_PREFIX)) {
           return {
             ...block,
             name: block.name.slice(CLAUDE_OAUTH_TOOL_PREFIX.length)
@@ -317,7 +319,6 @@ function openaiToClaudeRequestForAntigravity(model, body, stream) {
         }
         return block;
       });
-      
       return { ...msg, content: updatedContent };
     });
   }
