@@ -245,7 +245,7 @@ export function openaiToOpenAIResponsesRequest(model, body, stream, credentials)
 
   // Convert tools format
   if (body.tools && Array.isArray(body.tools)) {
-    result.tools = body.tools.map(tool => {
+    result.tools = body.tools.filter(Boolean).map(tool => {
       if (tool.type === "function") {
         return {
           type: "function",

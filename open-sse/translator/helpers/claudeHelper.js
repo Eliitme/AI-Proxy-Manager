@@ -84,9 +84,10 @@ export function fixToolUseOrdering(messages) {
 export function prepareClaudeRequest(body, provider = null, apiKey = null) {
   // 1. System: remove all cache_control, add only to last block with ttl 1h
   if (body.system && Array.isArray(body.system)) {
-    body.system = body.system.map((block, i) => {
+    const systemBlocks = body.system.filter(Boolean);
+    body.system = systemBlocks.map((block, i) => {
       const { cache_control, ...rest } = block;
-      if (i === body.system.length - 1) {
+      if (i === systemBlocks.length - 1) {
         return { ...rest, cache_control: { type: "ephemeral", ttl: "1h" } };
       }
       return rest;
@@ -101,11 +102,11 @@ export function prepareClaudeRequest(body, provider = null, apiKey = null) {
     // Pass 1: remove cache_control + filter empty messages
     for (let i = 0; i < len; i++) {
       const msg = body.messages[i];
-      
+      if (!msg) continue;
       // Remove cache_control from content blocks
       if (Array.isArray(msg.content)) {
         for (const block of msg.content) {
-          delete block.cache_control;
+          if (block) delete block.cache_control;
         }
       }
 
@@ -146,6 +147,7 @@ export function prepareClaudeRequest(body, provider = null, apiKey = null) {
           
           // Always replace signature for all thinking blocks
           for (const block of msg.content) {
+            if (!block) continue;
             if (block.type === "thinking" || block.type === "redacted_thinking") {
               block.signature = DEFAULT_THINKING_CLAUDE_SIGNATURE;
               hasThinking = true;
@@ -170,12 +172,12 @@ export function prepareClaudeRequest(body, provider = null, apiKey = null) {
   if (body.tools && Array.isArray(body.tools)) {
     // Strip built-in tools (e.g. web_search_20250305) for providers that don't support them
     if (provider !== "claude") {
-      body.tools = body.tools.filter(tool => !tool.type || tool.type === "function");
+      body.tools = body.tools.filter(tool => tool && (!tool.type || tool.type === "function"));
     }
-
-    body.tools = body.tools.map((tool, i) => {
+    const toolsList = body.tools.filter(Boolean);
+    body.tools = toolsList.map((tool, i) => {
       const { cache_control, ...rest } = tool;
-      if (i === body.tools.length - 1) {
+      if (i === toolsList.length - 1) {
         return { ...rest, cache_control: { type: "ephemeral", ttl: "1h" } };
       }
       return rest;

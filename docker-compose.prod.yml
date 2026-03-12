@@ -16,6 +16,15 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-egs_proxy_ai}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-egs_proxy_ai}
       POSTGRES_DB: ${POSTGRES_DB:-egs_proxy_ai}
+    # Performance tuning for 100-user scale
+    command: >
+      postgres
+        -c max_connections=100
+        -c shared_buffers=256MB
+        -c effective_cache_size=768MB
+        -c work_mem=4MB
+        -c wal_buffers=16MB
+        -c checkpoint_completion_target=0.9
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -65,7 +74,7 @@ services:
       MICROSOFT_PUBLIC_CLIENT: ${MICROSOFT_PUBLIC_CLIENT:-true}
       MICROSOFT_TENANT_ID: ${MICROSOFT_TENANT_ID:-common}
       ADMIN_EMAILS: ${ADMIN_EMAILS:-}
-      PG_POOL_MAX: ${PG_POOL_MAX:-3}
+      PG_POOL_MAX: ${PG_POOL_MAX:-20}
     env_file:
       - .env
     volumes:
