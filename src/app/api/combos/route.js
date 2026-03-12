@@ -41,7 +41,9 @@ export async function POST(request) {
       return NextResponse.json({ error: "Combo name already exists" }, { status: 400 });
     }
 
-    const combo = await createCombo({ name, models: models || [] }, null);
+    const strategy = body.strategy || "ordered";
+    const weights = body.weights || null;
+    const combo = await createCombo({ name, models: models || [], strategy, weights }, null);
 
     return NextResponse.json(combo, { status: 201 });
   } catch (error) {

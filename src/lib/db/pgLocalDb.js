@@ -504,9 +504,11 @@ export async function createCombo(data, userId = null) {
   const p = await pool();
   const id = uuidv4();
   const now = new Date();
+  const strategy = data.strategy || "ordered";
+  const weights = data.weights ? JSON.stringify(data.weights) : null;
   await p.query(
-    "INSERT INTO combos (id, user_id, name, models, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6)",
-    [id, userId, data.name, JSON.stringify(data.models || []), now, now]
+    "INSERT INTO combos (id, user_id, name, models, strategy, weights, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+    [id, userId, data.name, JSON.stringify(data.models || []), strategy, weights, now, now]
   );
   return getComboById(id, userId);
 }
@@ -525,6 +527,14 @@ export async function updateCombo(id, data, userId = null) {
   if (data.models !== undefined) {
     updates.push(`models = $${i++}`);
     values.push(JSON.stringify(data.models));
+  }
+  if (data.strategy !== undefined) {
+    updates.push(`strategy = $${i++}`);
+    values.push(data.strategy);
+  }
+  if (data.weights !== undefined) {
+    updates.push(`weights = $${i++}`);
+    values.push(data.weights ? JSON.stringify(data.weights) : null);
   }
   if (updates.length === 0) return existing;
   updates.push(`updated_at = $${i++}`);
@@ -891,6 +901,27 @@ function _rowToSettings(row) {
     outboundProxyUrl: row.outbound_proxy_url || "",
     outboundNoProxy: row.outbound_no_proxy || "",
     fallbackStrategy: row.fallback_strategy || "fill-first",
+    // Circuit breaker
+    circuitBreakerEnabled: row.circuit_breaker_enabled ?? false,
+    circuitBreakerFailureThreshold: row.circuit_breaker_failure_threshold ?? 5,
+    circuitBreakerRecoveryWindowMs: row.circuit_breaker_recovery_window_ms ?? 60000,
+    // Idempotency
+    idempotencyEnabled: row.idempotency_enabled ?? false,
+    idempotencyTtlMs: row.idempotency_ttl_ms ?? 5000,
+    // Quota preflight
+    quotaPreflightEnabled: row.quota_preflight_enabled ?? false,
+    // Request cache
+    signatureCacheEnabled: row.signature_cache_enabled ?? false,
+    signatureCacheTtlMs: row.signature_cache_ttl_ms ?? 60000,
+    semanticCacheEnabled: row.semantic_cache_enabled ?? false,
+    semanticCacheTtlMs: row.semantic_cache_ttl_ms ?? 300000,
+    // Background task routing
+    backgroundTaskRoutingEnabled: row.background_task_routing_enabled ?? false,
+    backgroundTaskModel: row.background_task_model || "",
+    // MCP server
+    mcpServerEnabled: row.mcp_server_enabled ?? false,
+    // IP filter
+    ipFilterEnabled: row.ip_filter_enabled ?? true,
   };
 }
 
@@ -977,6 +1008,20 @@ export async function updateSettings(updates) {
     outboundProxyUrl: "outbound_proxy_url",
     outboundNoProxy: "outbound_no_proxy",
     fallbackStrategy: "fallback_strategy",
+    circuitBreakerEnabled: "circuit_breaker_enabled",
+    circuitBreakerFailureThreshold: "circuit_breaker_failure_threshold",
+    circuitBreakerRecoveryWindowMs: "circuit_breaker_recovery_window_ms",
+    idempotencyEnabled: "idempotency_enabled",
+    idempotencyTtlMs: "idempotency_ttl_ms",
+    quotaPreflightEnabled: "quota_preflight_enabled",
+    signatureCacheEnabled: "signature_cache_enabled",
+    signatureCacheTtlMs: "signature_cache_ttl_ms",
+    semanticCacheEnabled: "semantic_cache_enabled",
+    semanticCacheTtlMs: "semantic_cache_ttl_ms",
+    backgroundTaskRoutingEnabled: "background_task_routing_enabled",
+    backgroundTaskModel: "background_task_model",
+    mcpServerEnabled: "mcp_server_enabled",
+    ipFilterEnabled: "ip_filter_enabled",
   };
   for (const [k, v] of Object.entries(updates)) {
     const col = map[k];
@@ -1297,3 +1342,169 @@ export async function deleteProxyPool(id) {
   const res = await p.query("DELETE FROM proxy_pools WHERE id = $1 RETURNING *", [id]);
   return res.rows[0] ? rowToCamel(res.rows[0]) : null;
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Circuit Breaker State
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function upsertCircuitBreakerState(connectionId, state) {
+  const p = await pool();
+  await p.query(
+    `INSERT INTO circuit_breaker_state (connection_id, state, failure_count, last_failure_at, opened_at, half_open_at, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, NOW())
+     ON CONFLICT (connection_id) DO UPDATE SET
+       state = EXCLUDED.state,
+       failure_count = EXCLUDED.failure_count,
+       last_failure_at = EXCLUDED.last_failure_at,
+       opened_at = EXCLUDED.opened_at,
+       half_open_at = EXCLUDED.half_open_at,
+       updated_at = NOW()`,
+    [connectionId, state.state, state.failureCount, state.lastFailureAt, state.openedAt, state.halfOpenAt]
+  );
+}
+
+export async function loadCircuitBreakerStates() {
+  const p = await pool();
+  const res = await p.query("SELECT * FROM circuit_breaker_state");
+  return res.rows.map((r) => ({
+    connectionId: r.connection_id,
+    state: r.state,
+    failureCount: r.failure_count,
+    lastFailureAt: r.last_failure_at ? Number(r.last_failure_at) : null,
+    openedAt: r.opened_at ? Number(r.opened_at) : null,
+    halfOpenAt: r.half_open_at ? Number(r.half_open_at) : null,
+  }));
+}
+
+export async function getCircuitBreakerState(connectionId) {
+  const p = await pool();
+  const res = await p.query("SELECT * FROM circuit_breaker_state WHERE connection_id = $1", [connectionId]);
+  if (!res.rows[0]) return null;
+  const r = res.rows[0];
+  return {
+    connectionId: r.connection_id,
+    state: r.state,
+    failureCount: r.failure_count,
+    lastFailureAt: r.last_failure_at ? Number(r.last_failure_at) : null,
+    openedAt: r.opened_at ? Number(r.opened_at) : null,
+    halfOpenAt: r.half_open_at ? Number(r.half_open_at) : null,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Wildcard Routes
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function getWildcardRoutes(userId = null) {
+  const p = await pool();
+  let q = "SELECT * FROM wildcard_routes";
+  const params = [];
+  if (userId) {
+    q += " WHERE user_id = $1";
+    params.push(userId);
+  }
+  q += " ORDER BY priority ASC, created_at ASC";
+  const res = await p.query(q, params);
+  return res.rows.map(rowToCamel);
+}
+
+export async function createWildcardRoute({ userId, pattern, target, priority = 100 }) {
+  const p = await pool();
+  const res = await p.query(
+    "INSERT INTO wildcard_routes (id, user_id, pattern, target, priority, created_at) VALUES (uuid_generate_v4(), $1, $2, $3, $4, NOW()) RETURNING *",
+    [userId, pattern, target, priority]
+  );
+  return rowToCamel(res.rows[0]);
+}
+
+export async function deleteWildcardRoute(id, userId = null) {
+  const p = await pool();
+  let q = "DELETE FROM wildcard_routes WHERE id = $1";
+  const params = [id];
+  if (userId) {
+    q += " AND user_id = $2";
+    params.push(userId);
+  }
+  q += " RETURNING *";
+  const res = await p.query(q, params);
+  return res.rows[0] ? rowToCamel(res.rows[0]) : null;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// IP Filter Rules
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function getIpFilterRules(userId = null) {
+  const p = await pool();
+  let q = "SELECT * FROM ip_filter_rules";
+  const params = [];
+  if (userId) {
+    q += " WHERE user_id = $1";
+    params.push(userId);
+  }
+  q += " ORDER BY created_at ASC";
+  const res = await p.query(q, params);
+  return res.rows.map(rowToCamel);
+}
+
+export async function createIpFilterRule({ userId, mode, cidr }) {
+  const p = await pool();
+  const res = await p.query(
+    "INSERT INTO ip_filter_rules (id, user_id, mode, cidr, created_at) VALUES (uuid_generate_v4(), $1, $2, $3, NOW()) RETURNING *",
+    [userId, mode, cidr]
+  );
+  return rowToCamel(res.rows[0]);
+}
+
+export async function deleteIpFilterRule(id, userId = null) {
+  const p = await pool();
+  let q = "DELETE FROM ip_filter_rules WHERE id = $1";
+  const params = [id];
+  if (userId) {
+    q += " AND user_id = $2";
+    params.push(userId);
+  }
+  q += " RETURNING *";
+  const res = await p.query(q, params);
+  return res.rows[0] ? rowToCamel(res.rows[0]) : null;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Model Deprecation Overrides
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function getModelDeprecationOverrides(userId = null) {
+  const p = await pool();
+  let q = "SELECT * FROM model_deprecation_overrides";
+  const params = [];
+  if (userId) {
+    q += " WHERE user_id = $1";
+    params.push(userId);
+  }
+  q += " ORDER BY created_at ASC";
+  const res = await p.query(q, params);
+  return res.rows.map(rowToCamel);
+}
+
+export async function createModelDeprecationOverride({ userId, fromModel, toModel }) {
+  const p = await pool();
+  const res = await p.query(
+    "INSERT INTO model_deprecation_overrides (id, user_id, from_model, to_model, created_at) VALUES (uuid_generate_v4(), $1, $2, $3, NOW()) ON CONFLICT (user_id, from_model) DO UPDATE SET to_model = EXCLUDED.to_model RETURNING *",
+    [userId, fromModel, toModel]
+  );
+  return rowToCamel(res.rows[0]);
+}
+
+export async function deleteModelDeprecationOverride(id, userId = null) {
+  const p = await pool();
+  let q = "DELETE FROM model_deprecation_overrides WHERE id = $1";
+  const params = [id];
+  if (userId) {
+    q += " AND user_id = $2";
+    params.push(userId);
+  }
+  q += " RETURNING *";
+  const res = await p.query(q, params);
+  return res.rows[0] ? rowToCamel(res.rows[0]) : null;
+}
+

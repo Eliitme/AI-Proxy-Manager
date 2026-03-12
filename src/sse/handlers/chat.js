@@ -17,6 +17,13 @@ import { detectFormatByEndpoint } from "open-sse/translator/formats.js";
 import * as log from "../utils/logger.js";
 import { updateProviderCredentials, checkAndRefreshToken } from "../services/tokenRefresh.js";
 import { getProjectIdForConnection } from "open-sse/services/projectId.js";
+import { recordSuccess as cbRecordSuccess, recordFailure as cbRecordFailure } from "open-sse/services/circuitBreaker.js";
+import { runRequestPipeline, writeBackCache, registerIdempotencyRequest } from "open-sse/middleware/requestPipeline.js";
+import { setPricingLookup } from "open-sse/services/comboStrategy.js";
+import { getPricingForModel } from "@/lib/localDb";
+
+// Wire pricing lookup for cost-optimized combo strategy (once, at module load)
+setPricingLookup(getPricingForModel);
 
 /**
  * Handle chat completion request
@@ -93,26 +100,50 @@ export async function handleChat(request, clientRawRequest = null) {
     return errorResponse(HTTP_STATUS.BAD_REQUEST, "Missing model");
   }
 
+  // Run request pipeline (IP filter, idempotency, model rewrite, wildcard, background task, quota, cache)
+  const settings = await getSettings();
+  const url2 = new URL(request.url);
+  const pipelineCtx = {
+    request,
+    body,
+    userId,
+    method: "POST",
+    path: url2.pathname,
+    settings,
+    excludedConnections: new Set(),
+    isBackgroundTask: false,
+  };
+  const pipelineResult = await runRequestPipeline(pipelineCtx);
+  if (pipelineResult.done) {
+    return pipelineResult.response;
+  }
+
+  // Use (possibly rewritten) body and ctx from pipeline
+  const pipelineBody = pipelineResult.ctx.body;
+  const pipelineModelStr = pipelineBody.model || modelStr;
+  const excludedConnections = pipelineResult.ctx.excludedConnections;
+
   // Check if model is a combo (has multiple models with fallback) — use global config
-  const comboModels = await getComboModels(modelStr, null);
+  const comboModels = await getComboModels(pipelineModelStr, null);
   if (comboModels) {
-    log.info("CHAT", `Combo "${modelStr}" with ${comboModels.length} models`);
+    log.info("CHAT", `Combo "${pipelineModelStr}" with ${comboModels.length} models`);
     return handleComboChat({
-      body,
+      body: pipelineBody,
       models: comboModels,
-      handleSingleModel: (b, m) => handleSingleModelChat(b, m, clientRawRequest, request, apiKey, userId, apiKeyId),
+      excludedConnections,
+      handleSingleModel: (b, m) => handleSingleModelChat(b, m, clientRawRequest, request, apiKey, userId, apiKeyId, excludedConnections),
       log
     });
   }
 
   // Single model request
-  return handleSingleModelChat(body, modelStr, clientRawRequest, request, apiKey, userId, apiKeyId);
+  return handleSingleModelChat(pipelineBody, pipelineModelStr, clientRawRequest, request, apiKey, userId, apiKeyId, excludedConnections);
 }
 
 /**
  * Handle single model chat request
  */
-async function handleSingleModelChat(body, modelStr, clientRawRequest = null, request = null, apiKey = null, userId = null, apiKeyId = null) {
+async function handleSingleModelChat(body, modelStr, clientRawRequest = null, request = null, apiKey = null, userId = null, apiKeyId = null, excludedConnections = new Set()) {
   const modelInfo = await getModelInfo(modelStr, null);
 
   // If provider is null, this might be a combo name - check and handle
@@ -149,7 +180,7 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
   let lastStatus = null;
 
   while (true) {
-    const credentials = await getProviderCredentials(provider, excludeConnectionId, model, null);
+    const credentials = await getProviderCredentials(provider, excludeConnectionId, model, null, excludedConnections);
 
     // All accounts unavailable
     if (!credentials || credentials.allRateLimited) {
@@ -207,10 +238,14 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
       },
       onRequestSuccess: async () => {
         await clearAccountError(credentials.connectionId, credentials, model);
+        cbRecordSuccess(credentials.connectionId);
       }
     });
 
     if (result.success) return result.response;
+
+    // Record failure in circuit breaker
+    cbRecordFailure(credentials.connectionId);
 
     // Mark account unavailable (auto-calculates cooldown with exponential backoff)
     const { shouldFallback } = await markAccountUnavailable(credentials.connectionId, result.status, result.error, provider, model);
