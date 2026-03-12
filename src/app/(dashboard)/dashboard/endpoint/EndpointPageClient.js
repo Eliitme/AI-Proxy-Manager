@@ -535,91 +535,6 @@ export default function APIPageClient({ machineId }) {
         )}
       </Card>
 
-      {/* Basic usage per provider */}
-      <Card>
-        <h2 className="text-lg font-semibold mb-1">Basic usage</h2>
-        <p className="text-sm text-text-muted mb-4">
-          Send requests to the endpoint with your API key; use model format <code className="text-xs bg-surface px-1 rounded" data-i18n-skip="true">provider/model-id</code>. Configure API keys or OAuth at Dashboard → Providers.
-        </p>
-
-        <div className="space-y-4">
-          <div>
-            <p className="text-xs font-medium text-text-muted uppercase tracking-wide mb-1">Authentication</p>
-            <code className="block text-sm bg-surface border border-border rounded px-2 py-1.5 font-mono" data-i18n-skip="true">
-              Authorization: Bearer &lt;api_key&gt;
-            </code>
-          </div>
-
-          <div>
-            <p className="text-xs font-medium text-text-muted uppercase tracking-wide mb-2">Main endpoints</p>
-            <div className="overflow-x-auto rounded border border-border">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="bg-sidebar/50 border-b border-border">
-                    <th className="text-left py-2 px-3 font-medium">Method</th>
-                    <th className="text-left py-2 px-3 font-medium">Path</th>
-                    <th className="text-left py-2 px-3 font-medium">Description</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-border">
-                  <tr><td className="py-2 px-3 font-mono" data-i18n-skip="true">GET</td><td className="py-2 px-3 font-mono" data-i18n-skip="true">/v1/models</td><td className="py-2 px-3 text-text-muted">List models (from configured providers)</td></tr>
-                  <tr><td className="py-2 px-3 font-mono" data-i18n-skip="true">POST</td><td className="py-2 px-3 font-mono" data-i18n-skip="true">/v1/chat/completions</td><td className="py-2 px-3 text-text-muted">Chat (OpenAI format), used for most providers</td></tr>
-                  <tr><td className="py-2 px-3 font-mono" data-i18n-skip="true">POST</td><td className="py-2 px-3 font-mono" data-i18n-skip="true">/v1/messages</td><td className="py-2 px-3 text-text-muted">Chat (Claude/Anthropic format)</td></tr>
-                  <tr><td className="py-2 px-3 font-mono" data-i18n-skip="true">POST</td><td className="py-2 px-3 font-mono" data-i18n-skip="true">/v1/embeddings</td><td className="py-2 px-3 text-text-muted">Embeddings (OpenAI-compatible)</td></tr>
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          <div>
-            <p className="text-xs font-medium text-text-muted uppercase tracking-wide mb-2">Example model per provider</p>
-            <p className="text-sm text-text-muted mb-2">
-              In the request body, set <code className="text-xs bg-surface px-1 rounded" data-i18n-skip="true">model</code> = <code className="text-xs bg-surface px-1 rounded" data-i18n-skip="true">provider/model-id</code>. Examples:
-            </p>
-            <div className="overflow-x-auto rounded border border-border max-h-[320px] overflow-y-auto">
-              <table className="w-full text-sm">
-                <thead className="sticky top-0 bg-sidebar z-10">
-                  <tr className="border-b border-border">
-                    <th className="text-left py-2 px-3 font-medium">Provider</th>
-                    <th className="text-left py-2 px-3 font-medium">Example model</th>
-                    <th className="text-left py-2 px-3 font-medium">Note</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-border">
-                  {[
-                    ...Object.entries(FREE_PROVIDERS),
-                    ...Object.entries(OAUTH_PROVIDERS),
-                    ...Object.entries(APIKEY_PROVIDERS),
-                  ].map(([id, p]) => {
-                    const example = getExampleModelForProvider(id, p.name);
-                    return (
-                      <tr key={id}>
-                        <td className="py-2 px-3">
-                          <span className="font-medium">{p.name}</span>
-                          <span className="text-text-muted ml-1 text-xs">({id})</span>
-                        </td>
-                        <td className="py-2 px-3 font-mono text-xs" data-i18n-skip="true">{example}</td>
-                        <td className="py-2 px-3 text-xs text-text-muted">{getProviderUsageNote(id)}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          <div>
-            <p className="text-xs font-medium text-text-muted uppercase tracking-wide mb-1">Example curl (chat)</p>
-            <pre className="text-xs bg-surface border border-border rounded p-3 overflow-x-auto font-mono text-text-muted">
-{`curl -X POST "${currentEndpoint}/chat/completions" \\
-  -H "Authorization: Bearer YOUR_API_KEY" \\
-  -H "Content-Type: application/json" \\
-  -d '{"model": "openai/gpt-4o", "messages": [{"role": "user", "content": "Hello"}]}'`}
-            </pre>
-          </div>
-        </div>
-      </Card>
-
       {/* API Keys */}
       <Card>
         <div className="flex items-center justify-between mb-4">
@@ -709,6 +624,91 @@ export default function APIPageClient({ machineId }) {
             ))}
           </div>
         )}
+      </Card>
+
+      {/* Basic usage per provider */}
+      <Card>
+        <h2 className="text-lg font-semibold mb-1">Basic usage</h2>
+        <p className="text-sm text-text-muted mb-4">
+          Send requests to the endpoint with your API key; use model format <code className="text-xs bg-surface px-1 rounded" data-i18n-skip="true">provider/model-id</code>. Configure API keys or OAuth at Dashboard → Providers.
+        </p>
+
+        <div className="space-y-4">
+          <div>
+            <p className="text-xs font-medium text-text-muted uppercase tracking-wide mb-1">Authentication</p>
+            <code className="block text-sm bg-surface border border-border rounded px-2 py-1.5 font-mono" data-i18n-skip="true">
+              Authorization: Bearer &lt;api_key&gt;
+            </code>
+          </div>
+
+          <div>
+            <p className="text-xs font-medium text-text-muted uppercase tracking-wide mb-2">Main endpoints</p>
+            <div className="overflow-x-auto rounded border border-border">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="bg-sidebar/50 border-b border-border">
+                    <th className="text-left py-2 px-3 font-medium">Method</th>
+                    <th className="text-left py-2 px-3 font-medium">Path</th>
+                    <th className="text-left py-2 px-3 font-medium">Description</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  <tr><td className="py-2 px-3 font-mono" data-i18n-skip="true">GET</td><td className="py-2 px-3 font-mono" data-i18n-skip="true">/v1/models</td><td className="py-2 px-3 text-text-muted">List models (from configured providers)</td></tr>
+                  <tr><td className="py-2 px-3 font-mono" data-i18n-skip="true">POST</td><td className="py-2 px-3 font-mono" data-i18n-skip="true">/v1/chat/completions</td><td className="py-2 px-3 text-text-muted">Chat (OpenAI format), used for most providers</td></tr>
+                  <tr><td className="py-2 px-3 font-mono" data-i18n-skip="true">POST</td><td className="py-2 px-3 font-mono" data-i18n-skip="true">/v1/messages</td><td className="py-2 px-3 text-text-muted">Chat (Claude/Anthropic format)</td></tr>
+                  <tr><td className="py-2 px-3 font-mono" data-i18n-skip="true">POST</td><td className="py-2 px-3 font-mono" data-i18n-skip="true">/v1/embeddings</td><td className="py-2 px-3 text-text-muted">Embeddings (OpenAI-compatible)</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div>
+            <p className="text-xs font-medium text-text-muted uppercase tracking-wide mb-2">Example model per provider</p>
+            <p className="text-sm text-text-muted mb-2">
+              In the request body, set <code className="text-xs bg-surface px-1 rounded" data-i18n-skip="true">model</code> = <code className="text-xs bg-surface px-1 rounded" data-i18n-skip="true">provider/model-id</code>. Examples:
+            </p>
+            <div className="overflow-x-auto rounded border border-border max-h-[320px] overflow-y-auto">
+              <table className="w-full text-sm">
+                <thead className="sticky top-0 bg-sidebar z-10">
+                  <tr className="border-b border-border">
+                    <th className="text-left py-2 px-3 font-medium">Provider</th>
+                    <th className="text-left py-2 px-3 font-medium">Example model</th>
+                    <th className="text-left py-2 px-3 font-medium">Note</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {[
+                    ...Object.entries(FREE_PROVIDERS),
+                    ...Object.entries(OAUTH_PROVIDERS),
+                    ...Object.entries(APIKEY_PROVIDERS),
+                  ].map(([id, p]) => {
+                    const example = getExampleModelForProvider(id, p.name);
+                    return (
+                      <tr key={id}>
+                        <td className="py-2 px-3">
+                          <span className="font-medium">{p.name}</span>
+                          <span className="text-text-muted ml-1 text-xs">({id})</span>
+                        </td>
+                        <td className="py-2 px-3 font-mono text-xs" data-i18n-skip="true">{example}</td>
+                        <td className="py-2 px-3 text-xs text-text-muted">{getProviderUsageNote(id)}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div>
+            <p className="text-xs font-medium text-text-muted uppercase tracking-wide mb-1">Example curl (chat)</p>
+            <pre className="text-xs bg-surface border border-border rounded p-3 overflow-x-auto font-mono text-text-muted">
+{`curl -X POST "${currentEndpoint}/chat/completions" \\
+  -H "Authorization: Bearer YOUR_API_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d '{"model": "openai/gpt-4o", "messages": [{"role": "user", "content": "Hello"}]}'`}
+            </pre>
+          </div>
+        </div>
       </Card>
 
       {/* CLOUD MODALS — COMMENTED OUT (replaced by Tunnel) */}

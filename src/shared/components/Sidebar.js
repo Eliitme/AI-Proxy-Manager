@@ -16,6 +16,7 @@ const navItems = [
   { href: "/dashboard/quota", label: "Quota Tracker", icon: "data_usage" },
   { href: "/dashboard/mitm", label: "MITM", icon: "security" },
   { href: "/dashboard/cli-tools", label: "CLI Tools", icon: "terminal" },
+  { href: "/dashboard/guide", label: "Guide", icon: "menu_book" },
   { href: "/dashboard/profile", label: "Profile", icon: "person" },
 ];
 
