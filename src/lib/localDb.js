@@ -59,4 +59,20 @@ export {
   updatePricing,
   resetPricing,
   resetAllPricing,
+  // Circuit Breaker
+  upsertCircuitBreakerState,
+  loadCircuitBreakerStates,
+  getCircuitBreakerState,
+  // Wildcard Routes
+  getWildcardRoutes,
+  createWildcardRoute,
+  deleteWildcardRoute,
+  // IP Filter Rules
+  getIpFilterRules,
+  createIpFilterRule,
+  deleteIpFilterRule,
+  // Model Deprecation Overrides
+  getModelDeprecationOverrides,
+  createModelDeprecationOverride,
+  deleteModelDeprecationOverride,
 } from "@/lib/db/pgLocalDb.js";

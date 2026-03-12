@@ -4,6 +4,7 @@ import { resolveConnectionProxyConfig } from "@/lib/network/connectionProxy";
 import { formatRetryAfter, checkFallbackError, isModelLockActive, getEarliestModelLockUntil, getQuotaCooldown } from "open-sse/services/accountFallback.js";
 import { resolveProviderId } from "@/shared/constants/providers.js";
 import * as log from "../utils/logger.js";
+import { isOpen as isCBOpen } from "open-sse/services/circuitBreaker.js";
 
 // Per-provider mutex map — only round-robin strategy needs serialization.
 // fill-first is deterministic and requires no mutex.
@@ -25,7 +26,7 @@ function _acquireProviderMutex(providerId) {
  * @param {string|null} model - Model name for per-model rate limit filtering
  * @param {string|null} userId - User ID to scope connections (resolved from API key)
  */
-export async function getProviderCredentials(provider, excludeConnectionId = null, model = null, userId = null) {
+export async function getProviderCredentials(provider, excludeConnectionId = null, model = null, userId = null, excludedConnections = new Set()) {
   // Resolve alias to provider ID (e.g., "kc" -> "kilocode")
   const providerId = resolveProviderId(provider);
 
@@ -37,10 +38,17 @@ export async function getProviderCredentials(provider, excludeConnectionId = nul
     return null;
   }
 
-  // Filter out model-locked and excluded connections
+  // Filter out model-locked, excluded, quota-exhausted, and open-circuit connections
+  const cbOpenConnections = connections.filter(c => isCBOpen(c.id));
+  const allCBOpen = cbOpenConnections.length === connections.length;
+  const allQuotaExcluded = excludedConnections.size >= connections.length;
   const availableConnections = connections.filter(c => {
     if (excludeConnectionId && c.id === excludeConnectionId) return false;
     if (isModelLockActive(c, model)) return false;
+    // Skip open-circuit connections unless ALL are open (graceful degradation)
+    if (!allCBOpen && isCBOpen(c.id)) return false;
+    // Skip quota-exhausted connections unless ALL are exhausted (graceful degradation)
+    if (!allQuotaExcluded && excludedConnections.has(c.id)) return false;
     return true;
   });
 

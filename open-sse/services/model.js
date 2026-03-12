@@ -1,3 +1,33 @@
+/**
+ * Built-in deprecated model renames.
+ * Maps old model name → recommended replacement.
+ * These are the defaults; user overrides are stored in model_deprecation_overrides table.
+ */
+export const DEPRECATED_MODELS = new Map([
+  // OpenAI
+  ["gpt-4", "gpt-4o"],
+  ["gpt-4-0314", "gpt-4o"],
+  ["gpt-4-0613", "gpt-4o"],
+  ["gpt-4-32k", "gpt-4o"],
+  ["gpt-4-32k-0314", "gpt-4o"],
+  ["gpt-4-32k-0613", "gpt-4o"],
+  ["gpt-3.5-turbo-0301", "gpt-4o-mini"],
+  ["gpt-3.5-turbo-0613", "gpt-4o-mini"],
+  ["gpt-3.5-turbo-16k", "gpt-4o-mini"],
+  ["gpt-3.5-turbo-16k-0613", "gpt-4o-mini"],
+  // Anthropic
+  ["claude-2", "claude-3-5-haiku-20241022"],
+  ["claude-2.0", "claude-3-5-haiku-20241022"],
+  ["claude-2.1", "claude-3-5-haiku-20241022"],
+  ["claude-instant-1", "claude-3-5-haiku-20241022"],
+  ["claude-instant-1.2", "claude-3-5-haiku-20241022"],
+  ["claude-3-opus-20240229", "claude-opus-4-5"],
+  // Google
+  ["gemini-1.0-pro", "gemini-2.0-flash"],
+  ["gemini-1.0-pro-001", "gemini-2.0-flash"],
+  ["gemini-pro", "gemini-2.0-flash"],
+]);
+
 // Provider alias to ID mapping
 const ALIAS_TO_PROVIDER_ID = {
   cc: "claude",

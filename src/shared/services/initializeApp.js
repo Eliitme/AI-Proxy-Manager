@@ -1,4 +1,10 @@
-import { cleanupProviderConnections, getSettings, updateSettings, getApiKeys } from "@/lib/localDb";
+import { cleanupProviderConnections, getSettings, updateSettings, getApiKeys, upsertCircuitBreakerState, loadCircuitBreakerStates, getWildcardRoutes, getIpFilterRules, getModelDeprecationOverrides } from "@/lib/localDb";
+import { initCircuitBreaker, loadAllStates as loadCBStates, setCircuitBreakerConfig } from "open-sse/services/circuitBreaker.js";
+import { initWildcardRouting } from "open-sse/services/wildcardRouting.js";
+import { initIpFilter } from "open-sse/services/ipFilter.js";
+import { initModelDeprecation } from "open-sse/services/modelDeprecation.js";
+import { setIdempotencyTtl } from "open-sse/services/idempotency.js";
+import { setCacheTtls } from "open-sse/services/requestCache.js";
 import { enableTunnel } from "@/lib/tunnel/tunnelManager";
 import { killCloudflared, isCloudflaredRunning, ensureCloudflared } from "@/lib/tunnel/cloudflared";
 import { getMitmStatus, startMitm, loadEncryptedPassword, initDbHooks } from "@/mitm/manager";
@@ -55,8 +61,36 @@ export async function initializeApp() {
   try {
     await cleanupProviderConnections();
 
-    // Auto-reconnect tunnel if it was enabled before restart
+    // Initialize circuit breaker with DB persistence functions and load persisted state
+    initCircuitBreaker({
+      persist: upsertCircuitBreakerState,
+      load: loadCircuitBreakerStates,
+    });
     const settings = await getSettings();
+    setCircuitBreakerConfig({
+      enabled: settings.circuitBreakerEnabled ?? false,
+      failureThreshold: settings.circuitBreakerFailureThreshold ?? 5,
+      recoveryWindowMs: settings.circuitBreakerRecoveryWindowMs ?? 60000,
+    });
+    await loadCBStates();
+
+    // Initialize wildcard routing with DB lookup
+    initWildcardRouting({ getRoutes: getWildcardRoutes });
+
+    // Initialize IP filter with DB lookup
+    initIpFilter({ getRules: getIpFilterRules });
+
+    // Initialize model deprecation with DB lookup
+    initModelDeprecation({ getOverrides: getModelDeprecationOverrides });
+
+    // Apply idempotency and cache TTL settings
+    if (settings.idempotencyTtlMs) setIdempotencyTtl(settings.idempotencyTtlMs);
+    setCacheTtls({
+      signatureCacheTtlMs: settings.signatureCacheTtlMs,
+      semanticCacheTtlMs: settings.semanticCacheTtlMs,
+    });
+
+    // Auto-reconnect tunnel if it was enabled before restart
     if (settings.tunnelEnabled && !isCloudflaredRunning()) {
       console.log("[InitApp] Tunnel was enabled, auto-reconnecting...");
       try {
