@@ -15,9 +15,9 @@ const TARGET_HOSTS = [
 
 const LOCAL_PORT = 443;
 const ROUTER_URL = "http://localhost:20128/v1/chat/completions";
+const ALIAS_API_URL = "http://localhost:20128/api/mitm/alias";
 const API_KEY = process.env.ROUTER_API_KEY;
-const { DATA_DIR, MITM_DIR } = require("./paths");
-const DB_FILE = path.join(DATA_DIR, "db.json");
+const { MITM_DIR } = require("./paths");
 
 const ENABLE_FILE_LOG = false;
 
@@ -126,15 +126,42 @@ function extractModel(url, body) {
   try { return JSON.parse(body.toString()).model || null; } catch { return null; }
 }
 
-function getMappedModel(tool, model) {
-  if (!model) return null;
+// In-memory alias cache with 30 s TTL.
+// Refreshed lazily on first call after expiry; stale data used on fetch error.
+let _aliasCache = null;         // { [tool]: { [model]: mappedModel } }
+let _aliasCacheTs = 0;
+const ALIAS_CACHE_TTL_MS = 30_000;
+
+async function _fetchAliasMap() {
   try {
-    if (!fs.existsSync(DB_FILE)) return null;
-    const db = JSON.parse(fs.readFileSync(DB_FILE, "utf-8"));
-    return db.mitmAlias?.[tool]?.[model] || null;
-  } catch {
-    return null;
+    const res = await fetch(ALIAS_API_URL, {
+      headers: { "x-request-source": "local" }
+    });
+    if (!res.ok) return;
+    const data = await res.json();
+    if (data && typeof data.aliases === "object") {
+      _aliasCache = data.aliases;
+      _aliasCacheTs = Date.now();
+    }
+  } catch (err) {
+    console.error(`❌ Failed to refresh alias cache: ${err.message}`);
+    // Keep stale cache — don't reset it
   }
+}
+
+// Seed the cache at startup (non-blocking)
+_fetchAliasMap();
+
+async function getMappedModel(tool, model) {
+  if (!model) return null;
+
+  const now = Date.now();
+  if (!_aliasCache || now - _aliasCacheTs >= ALIAS_CACHE_TTL_MS) {
+    await _fetchAliasMap();
+  }
+
+  if (!_aliasCache) return null;
+  return _aliasCache[tool]?.[model] || null;
 }
 
 /**
@@ -238,8 +265,8 @@ const server = https.createServer(sslOptions, async (req, res) => {
   if (!isChat) return passthrough(req, res, bodyBuffer);
 
   const model = extractModel(req.url, bodyBuffer);
-  console.log("Extracted model:",  model)
-  const mappedModel = getMappedModel(tool, model);
+  console.log("Extracted model:", model);
+  const mappedModel = await getMappedModel(tool, model);
 
   if (!mappedModel) return passthrough(req, res, bodyBuffer);
 

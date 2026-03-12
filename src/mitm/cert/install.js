@@ -79,8 +79,15 @@ async function installCertMac(sudoPassword, certPath) {
     await execWithPassword(command, sudoPassword);
     console.log(`✅ Installed certificate to system keychain: ${certPath}`);
   } catch (error) {
-    const msg = error.message?.includes("canceled") ? "User canceled authorization" : "Certificate install failed";
-    throw new Error(msg);
+    const raw = error.message || "";
+    console.error(`[MITM] Certificate install error: ${raw}`);
+    if (raw.includes("canceled") || raw.includes("cancelled")) {
+      throw new Error("User canceled authorization");
+    }
+    if (raw.includes("incorrect password") || raw.includes("Sorry, try again") || raw.includes("1 incorrect password attempt")) {
+      throw new Error("Certificate install failed: incorrect sudo password");
+    }
+    throw new Error(`Certificate install failed: ${raw || "unknown error"}`);
   }
 }
 

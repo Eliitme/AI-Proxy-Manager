@@ -43,16 +43,53 @@ if (files.length === 0) {
 
 const client = new pg.Client({ connectionString: DATABASE_URL });
 
+/**
+ * Split a SQL file into individual statements.
+ * Handles dollar-quoted strings and strips comments.
+ */
+function splitStatements(sql) {
+  // Remove single-line comments
+  const stripped = sql.replace(/--[^\n]*/g, "");
+  // Split on semicolons (naive but sufficient for migrations that avoid PL/pgSQL)
+  return stripped
+    .split(";")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+}
+
 async function run() {
   try {
     await client.connect();
     console.log("Connected to database.");
 
     for (const file of files) {
-      const path = join(migrationsDir, file);
-      const sql = readFileSync(path, "utf8");
+      const filePath = join(migrationsDir, file);
+      const sql = readFileSync(filePath, "utf8");
       process.stdout.write(`Running ${file} ... `);
-      await client.query(sql);
+
+      const statements = splitStatements(sql);
+
+      for (const stmt of statements) {
+        // CREATE INDEX CONCURRENTLY cannot run inside a transaction block.
+        // Detect it and run outside BEGIN/COMMIT.
+        const isConcurrent = /CREATE\s+(?:UNIQUE\s+)?INDEX\s+CONCURRENTLY/i.test(stmt);
+
+        if (isConcurrent) {
+          // Run directly — no transaction wrapper
+          await client.query(stmt);
+        } else {
+          // Wrap in a transaction for atomicity
+          await client.query("BEGIN");
+          try {
+            await client.query(stmt);
+            await client.query("COMMIT");
+          } catch (err) {
+            await client.query("ROLLBACK");
+            throw err;
+          }
+        }
+      }
+
       console.log("OK");
     }
 

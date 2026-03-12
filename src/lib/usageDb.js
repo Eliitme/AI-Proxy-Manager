@@ -1,5 +1,3 @@
-import { Low } from "lowdb";
-import { JSONFile } from "lowdb/node";
 import { EventEmitter } from "events";
 import path from "path";
 import os from "os";
@@ -52,9 +50,8 @@ function getUserDataDir() {
   }
 }
 
-// Data file path - stored in user home directory
+// Data directory — used for log.txt fallback only
 const DATA_DIR = getUserDataDir();
-const DB_FILE = isCloud ? null : path.join(DATA_DIR, "usage.json");
 const LOG_FILE = isCloud ? null : path.join(DATA_DIR, "log.txt");
 
 // Ensure data directory exists
@@ -68,14 +65,6 @@ if (!isCloud && fs && typeof fs.existsSync === "function") {
     console.error("[usageDb] Failed to create data directory:", error.message);
   }
 }
-
-// Default data structure
-const defaultData = {
-  history: []
-};
-
-// Singleton instance
-let dbInstance = null;
 
 // Use global to share pending state across Next.js route modules
 if (!global._pendingRequests) {
@@ -158,16 +147,8 @@ export async function getActiveRequests() {
     }
   }
 
-  // Get recent requests from history (PG or file)
-  let history;
-  const p = await pgPool();
-  if (p) {
-    history = await getUsageHistory({});
-  } else {
-    const db = await getUsageDb();
-    await db.read();
-    history = db.data.history || [];
-  }
+  // Get recent requests from history (PG)
+  const history = await getUsageHistory({});
   const seen = new Set();
   const recentRequests = [...history]
     .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
@@ -194,59 +175,7 @@ export async function getActiveRequests() {
 }
 
 /**
- * Get usage database instance (singleton).
- * When PostgreSQL is used, returns a mock with empty history (read/write via PG in other functions).
- */
-export async function getUsageDb() {
-  if (isCloud) {
-    if (!dbInstance) {
-      dbInstance = new Low({ read: async () => {}, write: async () => {} }, defaultData);
-      dbInstance.data = defaultData;
-    }
-    return dbInstance;
-  }
-
-  const p = await pgPool();
-  if (p) {
-    return {
-      data: { history: [] },
-      read: async () => {},
-      write: async () => {},
-    };
-  }
-
-  if (!dbInstance) {
-    const adapter = new JSONFile(DB_FILE);
-    dbInstance = new Low(adapter, defaultData);
-
-    // Try to read DB with error recovery for corrupt JSON
-    try {
-      await dbInstance.read();
-    } catch (error) {
-      if (error instanceof SyntaxError) {
-        console.warn('[DB] Corrupt Usage JSON detected, resetting to defaults...');
-        dbInstance.data = defaultData;
-        await dbInstance.write();
-      } else {
-        throw error;
-      }
-    }
-
-    // Initialize with default data if empty
-    if (!dbInstance.data) {
-      dbInstance.data = defaultData;
-      await dbInstance.write();
-    }
-  }
-  return dbInstance;
-}
-
-/**
- * Save request usage
- * @param {object} entry - Usage entry { provider, model, tokens: { prompt_tokens, completion_tokens, ... }, connectionId?, apiKey?, userId?, apiKeyId? }
- */
-/**
- * Save request usage to history
+ * Save request usage to history (PostgreSQL only)
  * @param {object} entry - Usage entry with userId, apiKeyId, provider, model, tokens, etc.
  */
 export async function saveRequestUsage(entry) {
@@ -258,31 +187,27 @@ export async function saveRequestUsage(entry) {
     entry.cost = entryCost;
 
     const p = await pgPool();
-    if (p) {
-      await p.query(
-        `INSERT INTO usage_history (user_id, api_key_id, model, provider, connection_id, tokens, cost, status, endpoint, timestamp)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-        [
-          entry.userId || null,
-          entry.apiKeyId || null,
-          entry.model || null,
-          entry.provider || null,
-          entry.connectionId || null,
-          JSON.stringify(entry.tokens || {}),
-          entry.cost ?? 0,
-          entry.status || "ok",
-          entry.endpoint || null,
-          new Date(entry.timestamp),
-        ]
-      );
-      statsEmitter.emit("update");
+    if (!p) {
+      console.warn("[usageDb] No PostgreSQL pool — usage entry dropped.");
       return;
     }
 
-    const db = await getUsageDb();
-    if (!Array.isArray(db.data.history)) db.data.history = [];
-    db.data.history.push(entry);
-    await db.write();
+    await p.query(
+      `INSERT INTO usage_history (user_id, api_key_id, model, provider, connection_id, tokens, cost, status, endpoint, timestamp)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+      [
+        entry.userId || null,
+        entry.apiKeyId || null,
+        entry.model || null,
+        entry.provider || null,
+        entry.connectionId || null,
+        JSON.stringify(entry.tokens || {}),
+        entry.cost ?? 0,
+        entry.status || "ok",
+        entry.endpoint || null,
+        new Date(entry.timestamp),
+      ]
+    );
     statsEmitter.emit("update");
   } catch (error) {
     console.error("Failed to save usage stats:", error);
@@ -290,55 +215,41 @@ export async function saveRequestUsage(entry) {
 }
 
 /**
- * Get usage history
+ * Get usage history (PostgreSQL only)
  * @param {object} filter - Filter criteria
  * @param {string} [filter.userId] - Filter by user ID
  */
 export async function getUsageHistory(filter = {}) {
   const p = await pgPool();
-  if (p) {
-    const conditions = [];
-    const params = [];
-    let i = 1;
-    if (filter.userId) { conditions.push(`user_id = $${i++}`); params.push(filter.userId); }
-    if (filter.provider) { conditions.push(`provider = $${i++}`); params.push(filter.provider); }
-    if (filter.model) { conditions.push(`model = $${i++}`); params.push(filter.model); }
-    if (filter.startDate) { conditions.push(`timestamp >= $${i++}`); params.push(new Date(filter.startDate)); }
-    if (filter.endDate) { conditions.push(`timestamp <= $${i++}`); params.push(new Date(filter.endDate)); }
-    const where = conditions.length ? "WHERE " + conditions.join(" AND ") : "";
-    const res = await p.query("SELECT * FROM usage_history " + where + " ORDER BY timestamp DESC", params);
-    const safeTokens = (t) => {
-      if (t == null) return {};
-      if (typeof t === "object") return t;
-      try { return typeof t === "string" ? JSON.parse(t) : {}; } catch { return {}; }
-    };
-    return (res.rows || []).map((row) => ({
-      userId: row.user_id,
-      apiKeyId: row.api_key_id,
-      provider: row.provider,
-      model: row.model,
-      connectionId: row.connection_id,
-      tokens: safeTokens(row.tokens),
-      cost: Number(row.cost ?? 0),
-      status: row.status,
-      endpoint: row.endpoint,
-      timestamp: new Date(row.timestamp).toISOString(),
-    }));
-  }
-  const db = await getUsageDb();
-  let history = db.data.history || [];
-  if (filter.userId) history = history.filter(h => h.userId === filter.userId);
-  if (filter.provider) history = history.filter(h => h.provider === filter.provider);
-  if (filter.model) history = history.filter(h => h.model === filter.model);
-  if (filter.startDate) {
-    const start = new Date(filter.startDate).getTime();
-    history = history.filter(h => new Date(h.timestamp).getTime() >= start);
-  }
-  if (filter.endDate) {
-    const end = new Date(filter.endDate).getTime();
-    history = history.filter(h => new Date(h.timestamp).getTime() <= end);
-  }
-  return history;
+  if (!p) return [];
+
+  const conditions = [];
+  const params = [];
+  let i = 1;
+  if (filter.userId) { conditions.push(`user_id = $${i++}`); params.push(filter.userId); }
+  if (filter.provider) { conditions.push(`provider = $${i++}`); params.push(filter.provider); }
+  if (filter.model) { conditions.push(`model = $${i++}`); params.push(filter.model); }
+  if (filter.startDate) { conditions.push(`timestamp >= $${i++}`); params.push(new Date(filter.startDate)); }
+  if (filter.endDate) { conditions.push(`timestamp <= $${i++}`); params.push(new Date(filter.endDate)); }
+  const where = conditions.length ? "WHERE " + conditions.join(" AND ") : "";
+  const res = await p.query("SELECT * FROM usage_history " + where + " ORDER BY timestamp DESC", params);
+  const safeTokens = (t) => {
+    if (t == null) return {};
+    if (typeof t === "object") return t;
+    try { return typeof t === "string" ? JSON.parse(t) : {}; } catch { return {}; }
+  };
+  return (res.rows || []).map((row) => ({
+    userId: row.user_id,
+    apiKeyId: row.api_key_id,
+    provider: row.provider,
+    model: row.model,
+    connectionId: row.connection_id,
+    tokens: safeTokens(row.tokens),
+    cost: Number(row.cost ?? 0),
+    status: row.status,
+    endpoint: row.endpoint,
+    timestamp: new Date(row.timestamp).toISOString(),
+  }));
 }
 
 /**
@@ -355,9 +266,30 @@ function formatLogDate(date = new Date()) {
   return `${d}-${m}-${y} ${h}:${min}:${s}`;
 }
 
+// Periodic cleanup of request_logs: trim to 200 rows every 60 seconds.
+// Using a global guard so Next.js hot-reload doesn't stack multiple intervals.
+if (!isCloud) {
+  if (global._logCleanupTimer) {
+    clearInterval(global._logCleanupTimer);
+  }
+  global._logCleanupTimer = setInterval(async () => {
+    try {
+      const pool = await pgPool();
+      if (!pool) return;
+      await pool.query(
+        `DELETE FROM request_logs WHERE id NOT IN (
+          SELECT id FROM request_logs ORDER BY created_at DESC LIMIT 200
+        )`
+      );
+    } catch {
+      // Non-critical — silently ignore cleanup failures
+    }
+  }, 60_000);
+}
+
 /**
- * Append to log.txt
- * Format: datetime(dd-mm-yyyy h:m:s) | model | provider | account | tokens sent | tokens received | status | userId
+ * Append to request_logs table (PostgreSQL) or log.txt fallback.
+ * Cleanup (trim to 200 rows) happens via a periodic interval, not per-insert.
  */
 export async function appendRequestLog({ model, provider, connectionId, tokens, status, userId, apiKeyId }) {
   if (isCloud) return;
@@ -384,14 +316,10 @@ export async function appendRequestLog({ model, provider, connectionId, tokens, 
         "INSERT INTO request_logs (message, user_id) VALUES ($1, $2)",
         [line, userId || null]
       );
-      await pool.query(
-        `DELETE FROM request_logs WHERE id NOT IN (
-          SELECT id FROM request_logs ORDER BY created_at DESC LIMIT 200
-        )`
-      );
       return;
     }
 
+    // File-based fallback (no PostgreSQL available)
     if (!LOG_FILE) return;
     fs.appendFileSync(LOG_FILE, line + "\n");
     const content = fs.readFileSync(LOG_FILE, "utf-8");
@@ -431,6 +359,7 @@ export async function getRecentLogs(limit = 200, userId = null) {
     }
   }
 
+  // File-based fallback (no PostgreSQL available)
   if (!fs || typeof fs.existsSync !== "function" || !LOG_FILE) return [];
   if (!fs.existsSync(LOG_FILE)) return [];
   try {
@@ -522,28 +451,16 @@ async function calculateCost(provider, model, tokens) {
 const PERIOD_MS = { "24h": 86400000, "7d": 604800000, "30d": 2592000000, "60d": 5184000000 };
 
 /**
- * Get aggregated usage stats
+ * Get aggregated usage stats (PostgreSQL only)
  * @param {"24h"|"7d"|"30d"|"60d"|"all"} period - Time period to filter
  */
 export async function getUsageStats(period = "all", userId = null) {
-  let history;
-  const p = await pgPool();
-  if (p) {
-    const filter = {};
-    if (userId) filter.userId = userId;
-    if (period && PERIOD_MS[period]) {
-      filter.startDate = new Date(Date.now() - PERIOD_MS[period]).toISOString();
-    }
-    history = await getUsageHistory(filter);
-  } else {
-    const db = await getUsageDb();
-    history = db.data.history || [];
-    if (userId) history = history.filter((h) => h.userId === userId);
-    if (period && PERIOD_MS[period]) {
-      const cutoff = Date.now() - PERIOD_MS[period];
-      history = history.filter((e) => new Date(e.timestamp).getTime() >= cutoff);
-    }
+  const filter = {};
+  if (userId) filter.userId = userId;
+  if (period && PERIOD_MS[period]) {
+    filter.startDate = new Date(Date.now() - PERIOD_MS[period]).toISOString();
   }
+  const history = await getUsageHistory(filter);
 
   // Import localDb to get provider connection names and API keys
   const { getProviderConnections, getApiKeys, getProviderNodes } = await import("@/lib/localDb.js");
@@ -553,7 +470,6 @@ export async function getUsageStats(period = "all", userId = null) {
   try {
     allConnections = await getProviderConnections();
   } catch (error) {
-    // If localDb is not available (e.g., in some environments), continue without account names
     console.warn("Could not fetch provider connections for usage stats:", error.message);
   }
 
@@ -882,19 +798,11 @@ export async function getUsageStats(period = "all", userId = null) {
  * @returns {Promise<Array<{label: string, tokens: number, cost: number}>>}
  */
 export async function getChartData(period = "7d", userId = null) {
-  let history;
-  const p = await pgPool();
-  if (p) {
-    const filter = {};
-    if (userId) filter.userId = userId;
-    const periodMs = { "24h": 86400000, "7d": 604800000, "30d": 2592000000, "60d": 5184000000 }[period];
-    if (periodMs) filter.startDate = new Date(Date.now() - periodMs).toISOString();
-    history = await getUsageHistory(filter);
-  } else {
-    const db = await getUsageDb();
-    history = db.data.history || [];
-    if (userId) history = history.filter((h) => h.userId === userId);
-  }
+  const filter = {};
+  if (userId) filter.userId = userId;
+  const periodMs = { "24h": 86400000, "7d": 604800000, "30d": 2592000000, "60d": 5184000000 }[period];
+  if (periodMs) filter.startDate = new Date(Date.now() - periodMs).toISOString();
+  const history = await getUsageHistory(filter);
 
   const now = Date.now();
 

@@ -173,11 +173,18 @@ export async function updateProviderCredentials(connectionId, newCredentials) {
   }
 }
 
+// ─── Token refresh deduplication ─────────────────────────────────────────────
+// Prevents thundering herd: if N concurrent requests share the same connection
+// and the token is near-expiry, only the first refresh call goes to the upstream;
+// all others await the same Promise and receive the refreshed credentials.
+const _refreshInFlight = new Map();
+
 // ─── Local-specific: proactive token refresh ─────────────────────────────────
 
 /**
  * Check whether the provider token (and, for GitHub, the Copilot token) is
  * about to expire and refresh it proactively.
+ * Concurrent calls for the same connectionId share a single upstream refresh.
  *
  * @param {string} provider
  * @param {object} credentials
@@ -185,6 +192,8 @@ export async function updateProviderCredentials(connectionId, newCredentials) {
  */
 export async function checkAndRefreshToken(provider, credentials) {
   let creds = { ...credentials };
+
+  const connectionId = creds.connectionId;
 
   // ── 1. Regular access-token expiry ────────────────────────────────────────
   if (creds.expiresAt) {
@@ -198,15 +207,28 @@ export async function checkAndRefreshToken(provider, credentials) {
         expiresIn: Math.round(remaining / 1000),
       });
 
-      const newCreds = await getAccessToken(provider, creds);
+      // Deduplicate: reuse any in-flight refresh for this connection.
+      // The promise resolves to { newCreds } so all waiters get the same tokens,
+      // but only the creator persists to DB (avoiding N concurrent identical writes).
+      const dedupeKey = `access:${connectionId}`;
+      let refreshPromise = _refreshInFlight.get(dedupeKey);
+      const isCreator = !refreshPromise;
+      if (!refreshPromise) {
+        refreshPromise = getAccessToken(provider, creds).finally(() => {
+          _refreshInFlight.delete(dedupeKey);
+        });
+        _refreshInFlight.set(dedupeKey, refreshPromise);
+      }
+
+      const newCreds = await refreshPromise;
       if (newCreds?.accessToken) {
         const mergedCreds = {
           ...newCreds,
           existingProviderSpecificData: creds.providerSpecificData,
         };
 
-        // Persist to DB (non-blocking path continues below)
-        await updateProviderCredentials(creds.connectionId, mergedCreds);
+        // Only the creator persists — waiters skip the DB write (same data already written)
+        if (isCreator) await updateProviderCredentials(connectionId, mergedCreds);
 
         creds = {
           ...creds,
@@ -221,7 +243,7 @@ export async function checkAndRefreshToken(provider, credentials) {
         };
 
         // Non-blocking: refresh projectId with the new access token
-        _refreshProjectId(provider, creds.connectionId, creds.accessToken);
+        _refreshProjectId(provider, connectionId, creds.accessToken);
       }
     }
   }
@@ -238,7 +260,17 @@ export async function checkAndRefreshToken(provider, credentials) {
         expiresIn: Math.round(remaining / 1000),
       });
 
-      const copilotToken = await refreshCopilotToken(creds.accessToken);
+      // Deduplicate Copilot token refresh for the same connection.
+      const dedupeKey = `copilot:${connectionId}`;
+      let refreshPromise = _refreshInFlight.get(dedupeKey);
+      if (!refreshPromise) {
+        refreshPromise = refreshCopilotToken(creds.accessToken).finally(() => {
+          _refreshInFlight.delete(dedupeKey);
+        });
+        _refreshInFlight.set(dedupeKey, refreshPromise);
+      }
+
+      const copilotToken = await refreshPromise;
       if (copilotToken) {
         const updatedSpecific = {
           ...creds.providerSpecificData,
@@ -246,7 +278,7 @@ export async function checkAndRefreshToken(provider, credentials) {
           copilotTokenExpiresAt: copilotToken.expiresAt,
         };
 
-        await updateProviderCredentials(creds.connectionId, {
+        await updateProviderCredentials(connectionId, {
           providerSpecificData: updatedSpecific,
         });
 

@@ -23,6 +23,23 @@ function rowToCamel(row) {
   return out;
 }
 
+/**
+ * Expose modelLock_* entries from providerSpecificData as top-level properties.
+ * This allows isModelLockActive() to read connection.modelLock_<model> directly.
+ * Mutates the object in place.
+ */
+function _exposeModelLocks(c) {
+  if (!c || !c.providerSpecificData) return;
+  const psd = typeof c.providerSpecificData === "string"
+    ? JSON.parse(c.providerSpecificData)
+    : c.providerSpecificData;
+  for (const [k, v] of Object.entries(psd)) {
+    if (k.startsWith("modelLock_")) {
+      c[k] = v;
+    }
+  }
+}
+
 const DEFAULT_SETTINGS = {
   cloudEnabled: false,
   tunnelEnabled: false,
@@ -69,6 +86,7 @@ export async function getProviderConnections(filter = {}, userId = null) {
   let list = res.rows.map(rowToCamel);
   list.forEach((c) => {
     if (c.apiKey != null) c.apiKey = decryptProviderApiKey(c.apiKey);
+    _exposeModelLocks(c);
   });
   return list;
 }
@@ -84,6 +102,7 @@ export async function getProviderConnectionById(id, userId = null) {
   const c = rowToCamel(row);
   if (userId && c.userId && c.userId !== userId) return null;
   if (c.apiKey != null) c.apiKey = decryptProviderApiKey(c.apiKey);
+  _exposeModelLocks(c);
   return c;
 }
 
@@ -175,8 +194,12 @@ export async function createProviderConnection(data) {
 }
 
 export async function updateProviderConnection(id, data, userId = null) {
-  const existing = await getProviderConnectionById(id, userId);
-  if (!existing) return null;
+  // When userId is provided (user-facing CRUD), validate ownership before update.
+  // For internal hot-path calls (auth.js, tokenRefresh.js), userId is null — skip the extra SELECT.
+  if (userId) {
+    const existing = await getProviderConnectionById(id, userId);
+    if (!existing) return null;
+  }
   const p = await pool();
   const updates = [];
   const values = [];
@@ -210,6 +233,15 @@ export async function updateProviderConnection(id, data, userId = null) {
     defaultModel: "default_model",
     providerSpecificData: "provider_specific_data",
   };
+
+  // Collect modelLock_* keys to merge into provider_specific_data JSONB
+  const modelLockPatch = {};
+  for (const [k, v] of Object.entries(data)) {
+    if (k.startsWith("modelLock_")) {
+      modelLockPatch[k] = v;
+    }
+  }
+
   for (const [k, col] of Object.entries(map)) {
     if (data[k] !== undefined) {
       updates.push(`${col} = $${i++}`);
@@ -220,15 +252,31 @@ export async function updateProviderConnection(id, data, userId = null) {
       values.push(k === "apiKey" && val != null ? encrypt(val) : val);
     }
   }
-  if (updates.length === 0) return existing;
+
+  // Merge modelLock_* patch into provider_specific_data JSONB (only if no explicit providerSpecificData override)
+  if (Object.keys(modelLockPatch).length > 0 && data.providerSpecificData === undefined) {
+    updates.push(`provider_specific_data = COALESCE(provider_specific_data, '{}'::jsonb) || $${i++}::jsonb`);
+    values.push(JSON.stringify(modelLockPatch));
+  }
+
+  if (updates.length === 0) {
+    // No changes — if userId validation was skipped, do a plain read to return current state
+    return getProviderConnectionById(id, null);
+  }
   updates.push(`updated_at = $${i++}`);
   values.push(new Date());
   values.push(id);
-  await p.query(
-    `UPDATE provider_connections SET ${updates.join(", ")} WHERE id = $${i}`,
+  const res = await p.query(
+    `UPDATE provider_connections SET ${updates.join(", ")} WHERE id = $${i} RETURNING *`,
     values
   );
-  return getProviderConnectionById(id, userId);
+  const row = res.rows[0];
+  if (!row) return null;
+  const c = rowToCamel(row);
+  if (c.apiKey != null) c.apiKey = decryptProviderApiKey(c.apiKey);
+  // Expose modelLock_* keys from providerSpecificData at top-level
+  _exposeModelLocks(c);
+  return c;
 }
 
 export async function deleteProviderConnection(id, userId = null) {
@@ -818,12 +866,14 @@ export async function deleteUser(id) {
 }
 
 // ---------- Settings (first user or default) ----------
-export async function getSettings() {
-  const p = await pool();
-  const res = await p.query(
-    "SELECT * FROM settings ORDER BY user_id LIMIT 1"
-  );
-  const row = res.rows[0];
+
+// In-process cache: avoids a DB query on every proxy request.
+// TTL is short (5s) so dashboard changes take effect quickly.
+const SETTINGS_CACHE_TTL_MS = 5000;
+let _settingsCache = null;
+let _settingsCacheTs = 0;
+
+function _rowToSettings(row) {
   if (!row) return { ...DEFAULT_SETTINGS };
   return {
     ...DEFAULT_SETTINGS,
@@ -842,6 +892,18 @@ export async function getSettings() {
     outboundNoProxy: row.outbound_no_proxy || "",
     fallbackStrategy: row.fallback_strategy || "fill-first",
   };
+}
+
+export async function getSettings() {
+  const now = Date.now();
+  if (_settingsCache && now - _settingsCacheTs < SETTINGS_CACHE_TTL_MS) {
+    return _settingsCache;
+  }
+  const p = await pool();
+  const res = await p.query("SELECT * FROM settings ORDER BY user_id LIMIT 1");
+  _settingsCache = _rowToSettings(res.rows[0]);
+  _settingsCacheTs = now;
+  return _settingsCache;
 }
 
 export async function updateSettings(updates) {
@@ -894,6 +956,7 @@ export async function updateSettings(updates) {
         now,
       ]
     );
+    _settingsCache = null;
     return { ...DEFAULT_SETTINGS, ...u };
   }
   const set = [];
@@ -925,6 +988,8 @@ export async function updateSettings(updates) {
   if (set.length === 0) return getSettings();
   vals.push(row.id);
   await p.query(`UPDATE settings SET ${set.join(", ")} WHERE id = $${i}`, vals);
+  // Invalidate settings cache so the next read fetches fresh data
+  _settingsCache = null;
   return getSettings();
 }
 
@@ -1161,4 +1226,74 @@ export async function resetAllPricing() {
   const p = await pool();
   await p.query("DELETE FROM pricing");
   return getPricing();
+}
+
+// ---------- Proxy pools ----------
+export async function getProxyPools(filter = {}) {
+  const p = await pool();
+  let q = "SELECT * FROM proxy_pools WHERE 1=1";
+  const params = [];
+  if (filter.isActive !== undefined) {
+    params.push(filter.isActive);
+    q += ` AND is_active = $${params.length}`;
+  }
+  q += " ORDER BY created_at";
+  const res = await p.query(q, params);
+  return res.rows.map(rowToCamel);
+}
+
+export async function getProxyPoolById(id) {
+  const p = await pool();
+  const res = await p.query("SELECT * FROM proxy_pools WHERE id = $1", [id]);
+  return res.rows[0] ? rowToCamel(res.rows[0]) : null;
+}
+
+export async function createProxyPool(data) {
+  const p = await pool();
+  const id = data.id || uuidv4();
+  const now = new Date();
+  await p.query(
+    `INSERT INTO proxy_pools (id, name, proxy_url, no_proxy, is_active, strict_proxy, created_at, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+    [
+      id,
+      data.name,
+      data.proxyUrl,
+      data.noProxy ?? "",
+      data.isActive ?? true,
+      data.strictProxy ?? false,
+      now,
+      now,
+    ]
+  );
+  return getProxyPoolById(id);
+}
+
+const PROXY_POOL_COLS = { name: "name", proxyUrl: "proxy_url", noProxy: "no_proxy", isActive: "is_active", strictProxy: "strict_proxy" };
+export async function updateProxyPool(id, data) {
+  const p = await pool();
+  const updates = [];
+  const values = [];
+  let i = 1;
+  for (const [k, col] of Object.entries(PROXY_POOL_COLS)) {
+    if (data[k] !== undefined) {
+      updates.push(`${col} = $${i++}`);
+      values.push(data[k]);
+    }
+  }
+  if (updates.length === 0) return getProxyPoolById(id);
+  updates.push(`updated_at = $${i++}`);
+  values.push(new Date());
+  values.push(id);
+  await p.query(
+    `UPDATE proxy_pools SET ${updates.join(", ")} WHERE id = $${i}`,
+    values
+  );
+  return getProxyPoolById(id);
+}
+
+export async function deleteProxyPool(id) {
+  const p = await pool();
+  const res = await p.query("DELETE FROM proxy_pools WHERE id = $1 RETURNING *", [id]);
+  return res.rows[0] ? rowToCamel(res.rows[0]) : null;
 }
